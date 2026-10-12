@@ -1,6 +1,6 @@
 // Offline shell for Green Timber Jobs. Data always comes live from Supabase.
-const CACHE = "gt-shell-mv5c8pf6";
-const SHELL = ["/", "/index.html", "/assets/app.js?v=mv5c8pf6", "/assets/app.css?v=mv5c8pf6", "/manifest.webmanifest", "/icon-192.png"];
+const CACHE = "gt-shell-mv5ex0gh";
+const SHELL = ["/", "/index.html", "/assets/app.js?v=mv5ex0gh", "/assets/app.css?v=mv5ex0gh", "/manifest.webmanifest", "/icon-192.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

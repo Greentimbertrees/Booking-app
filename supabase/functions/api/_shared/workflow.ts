@@ -457,6 +457,14 @@ export async function syncGmail() {
         continue;
       }
 
+      // Removed from the app earlier: leave it in Gmail and keep it off the board.
+      const { data: removed } = await admin.from("removed_threads").select("thread_id").eq("thread_id", e.threadId).maybeSingle();
+      if (removed) {
+        await admin.from("processed_gmail").insert({ gmail_id: ref.id, is_enquiry: false });
+        ignored++;
+        continue;
+      }
+
       // Which job does this belong to? Same Gmail thread first, then same customer email.
       let jobId: string | null = null;
       const { data: threadMsg } = await admin.from("messages").select("job_id").eq("thread_id", e.threadId)

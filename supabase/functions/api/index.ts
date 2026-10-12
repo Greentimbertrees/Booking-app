@@ -6,6 +6,7 @@ import { admin, corsHeaders, getConfig, handleError, HttpError, json, requireApp
 import * as g from "./_shared/google.ts";
 import { callback, makeState } from "./_shared/googleAuth.ts";
 import * as wf from "./_shared/workflow.ts";
+import { removeJob } from "./_shared/remove.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -131,6 +132,21 @@ Deno.serve(async (req) => {
 
       case "book-job":
         return json(await wf.bookJob(need("jobId"), need("startDate"), b.endDate || b.startDate));
+
+      case "remove-jobs": {
+        const ids: string[] = Array.isArray(b.jobIds) ? b.jobIds.filter((x: unknown) => typeof x === "string") : [];
+        if (!ids.length) throw new HttpError(400, "jobIds missing");
+        let removed = 0;
+        const skipped: string[] = [];
+        for (const id of ids.slice(0, 200)) {
+          try {
+            if ((await removeJob(id)).removed) removed++;
+          } catch (e) {
+            skipped.push(e instanceof Error ? e.message : String(e));
+          }
+        }
+        return json({ removed, skipped });
+      }
 
       case "create-invoice":
         return json(await wf.createInvoice(need("jobId"), !!b.send));

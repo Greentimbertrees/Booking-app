@@ -4,6 +4,7 @@ import {
   addDays, BackBar, fmtDate, fmtDateTime, fmtTime, go, Icon, londonToIso, MISSING_LABEL, money, SaveField,
   SOURCE_CHIP, Spinner, STEPS, todayLondon, useBusy, useToast,
 } from "./ui.jsx";
+import { RemoveJobsSheet } from "./remove.jsx";
 
 // Which council's protected-tree map to check, by postcode area.
 function councilFor(postcode) {
@@ -80,7 +81,23 @@ export function JobPage({ id, query }) {
         {step.key === "spec" && <SpecPanel {...props} openTab={openTab} />}
         {step.key === "quote" && <QuotePanel {...props} openTab={openTab} />}
         {step.key === "book" && <BookPanel {...props} />}
+        <RemoveJobButton d={d} />
       </div>
+    </>
+  );
+}
+
+function RemoveJobButton({ d }) {
+  const [open, setOpen] = useState(false);
+  if (d.invoices.length) return null;
+  const job = { ...d.job, site_visits: d.visits, invoices: d.invoices };
+  return (
+    <>
+      <button className="btn small danger remove-job" onClick={() => setOpen(true)}><Icon.trash />Remove from app</button>
+      {open && (
+        <RemoveJobsSheet jobs={[job]} onClose={() => setOpen(false)}
+          onRemoved={(r) => { setOpen(false); if (r.removed) go(`/jobs?step=${d.job.step}`); }} />
+      )}
     </>
   );
 }

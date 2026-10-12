@@ -7,6 +7,7 @@ import {
 } from "./ui.jsx";
 import { JobPage } from "./job.jsx";
 import { SettingsPage } from "./settings.jsx";
+import { RemoveJobsSheet } from "./remove.jsx";
 import "./app.css";
 
 // ---------------- Sign in ----------------
@@ -122,12 +123,13 @@ function nextLine(job) {
   }
 }
 
-function JobCard({ job }) {
+function JobCard({ job, selecting, selected, onToggle }) {
   const [src, tone] = SOURCE_CHIP[job.source] ?? ["Other", ""];
   const [next, strong] = nextLine(job);
   const c = job.customers ?? {};
-  return (
-    <a className="card job-card" href={`#/job/${job.id}`}>
+  const locked = (job.invoices ?? []).length > 0;
+  const body = (
+    <>
       <div className="row">
         <span className="who">{c.name || c.email || c.phone || "New enquiry"}</span>
         <span className={`chip ${tone}`}>{src}</span>
@@ -141,7 +143,18 @@ function JobCard({ job }) {
         {job.step === 1 && !(job.missing_fields ?? []).length && <span className="chip green">All details collected</span>}
       </div>
       {next && <span className={strong ? "next" : "small muted"}>{next}</span>}
-    </a>
+    </>
+  );
+  if (!selecting) return <a className="card job-card" href={`#/job/${job.id}`}>{body}</a>;
+  return (
+    <label className={`card job-card selectable ${selected ? "selected" : ""} ${locked ? "locked" : ""}`}>
+      <input type="checkbox" checked={selected} disabled={locked} onChange={() => onToggle(job.id)}
+        aria-label={`Select ${c.name || c.email || c.phone || "enquiry"}`} />
+      <div className="card-body">
+        {body}
+        {locked && <span className="small muted">Has an invoice, so it stays</span>}
+      </div>
+    </label>
   );
 }
 
@@ -150,17 +163,25 @@ function JobsPage({ query }) {
   const showDone = query.get("done") === "1";
   const [jobs, setJobs] = useState(null);
   const [adding, setAdding] = useState(false);
+  const [selecting, setSelecting] = useState(false);
+  const [picked, setPicked] = useState(() => new Set());
+  const [confirming, setConfirming] = useState(false);
   const [busy, run] = useBusy();
   const toast = useToast();
 
   const load = async () => {
     const filter = showDone ? "status=neq.open" : `status=eq.open&step=eq.${step}`;
     const rows = await sb.select("jobs",
-      `select=*,customers(name,email,phone),messages(status,direction),site_visits(starts_at,status),quotes(version,status,sent_at,created_at)&${filter}&order=updated_at.desc&limit=100`);
+      `select=*,customers(name,email,phone),messages(status,direction),site_visits(starts_at,status),quotes(version,status,sent_at,created_at),invoices(id)&${filter}&order=updated_at.desc&limit=100`);
     rows.sort((a, b) => (a.urgency === "emergency") === (b.urgency === "emergency") ? 0 : a.urgency === "emergency" ? -1 : 1);
     setJobs(rows);
   };
-  useEffect(() => { setJobs(null); load().catch((e) => toast(e.message, "error")); }, [step, showDone]);
+  useEffect(() => {
+    setJobs(null);
+    setSelecting(false);
+    setPicked(new Set());
+    load().catch((e) => toast(e.message, "error"));
+  }, [step, showDone]);
 
   const sync = () => run("sync", async () => {
     const r = await sb.action("sync");
@@ -168,6 +189,17 @@ function JobsPage({ query }) {
     if (r.skipped) toast("Connect Google in Settings to read Gmail");
     else toast(`Checked Gmail: ${r.created ?? 0} new, ${r.updated ?? 0} replies`);
   });
+
+  const removable = (jobs ?? []).filter((j) => !(j.invoices ?? []).length);
+  const toggle = (id) => setPicked((p) => {
+    const n = new Set(p);
+    n.has(id) ? n.delete(id) : n.add(id);
+    return n;
+  });
+  const allPicked = removable.length > 0 && removable.every((j) => picked.has(j.id));
+  const pickAll = () => setPicked(allPicked ? new Set() : new Set(removable.map((j) => j.id)));
+  const stopSelecting = () => { setSelecting(false); setPicked(new Set()); };
+  const pickedJobs = (jobs ?? []).filter((j) => picked.has(j.id));
 
   const s = STEPS[step - 1];
   return (
@@ -190,20 +222,54 @@ function JobsPage({ query }) {
             aria-current={!showDone && t.n === step ? "page" : undefined}>{t.label}</a>
         ))}
       </nav>
-      <div className="page">
+      <div className={`page ${selecting ? "with-action-bar" : ""}`}>
         <div className="section-head">
           <h2>{showDone ? "Finished and closed" : s.long}</h2>
-          <span className="small muted">{step === 1 && !showDone ? "Gmail · WhatsApp · SMS" : ""}</span>
+          {jobs?.length ? (
+            selecting ? (
+              <div className="head-actions">
+                <button className="link-btn" onClick={pickAll}>{allPicked ? "Clear" : "Select all"}</button>
+                <button className="link-btn" onClick={stopSelecting}>Done</button>
+              </div>
+            ) : (
+              <button className="link-btn" onClick={() => setSelecting(true)}>Select</button>
+            )
+          ) : (
+            <span className="small muted">{step === 1 && !showDone ? "Gmail · WhatsApp · SMS" : ""}</span>
+          )}
         </div>
         {jobs === null && <div className="empty"><Spinner /></div>}
         {jobs?.length === 0 && <div className="empty">Nothing here at the moment.</div>}
-        {jobs?.map((j) => <JobCard key={j.id} job={j} />)}
-        <a className="small" href={showDone ? "#/jobs?step=1" : "#/jobs?done=1"} style={{ textAlign: "center" }}>
-          {showDone ? "Back to open jobs" : "Show finished and closed jobs"}
-        </a>
+        {jobs?.map((j) => <JobCard key={j.id} job={j} selecting={selecting} selected={picked.has(j.id)} onToggle={toggle} />)}
+        {!selecting && (
+          <a className="small" href={showDone ? "#/jobs?step=1" : "#/jobs?done=1"} style={{ textAlign: "center" }}>
+            {showDone ? "Back to open jobs" : "Show finished and closed jobs"}
+          </a>
+        )}
       </div>
+      {selecting && (
+        <div className="action-bar" role="region" aria-label="Selected jobs">
+          <div className="action-bar-inner">
+            <span>{picked.size ? `${picked.size} selected` : "Tap cards to select"}</span>
+            <button className="btn danger-fill" disabled={!picked.size} onClick={() => setConfirming(true)}>
+              <Icon.trash />Remove from app
+            </button>
+          </div>
+        </div>
+      )}
+      {confirming && (
+        <RemoveJobsSheet
+          jobs={pickedJobs}
+          onClose={() => setConfirming(false)}
+          onRemoved={async () => {
+            setConfirming(false);
+            stopSelecting();
+            await load().catch((e) => toast(e.message, "error"));
+          }}
+        />
+      )}
       {adding && <NewEnquiry onClose={() => setAdding(false)} />}
-      <BottomNav active="jobs" />
+      {!selecting && <BottomNav active="jobs" />}
     </>
   );
 }
