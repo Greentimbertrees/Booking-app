@@ -1,0 +1,15 @@
+# Netlify deploys the ready-built app in web/dist (no build step needed).
+[build]
+  base = "web"
+  publish = "dist"
+  command = ""
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"

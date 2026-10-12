@@ -1,0 +1,16 @@
+{
+  "name": "Green Timber Jobs",
+  "short_name": "GT Jobs",
+  "description": "Enquiries, site visits, quotes and bookings for Green Timber Trees",
+  "start_url": "/#/jobs",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F3F4F1",
+  "theme_color": "#2F6B3F",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
