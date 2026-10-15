@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import * as sb from "./sb.js";
 import {
   addDays, BackBar, fmtDate, fmtDateTime, fmtTime, go, Icon, londonToIso, MISSING_LABEL, money, SaveField,
-  SOURCE_CHIP, Spinner, STEPS, todayLondon, useBusy, useToast,
+  Sheet, SOURCE_CHIP, Spinner, STEPS, todayLondon, useBusy, useToast,
 } from "./ui.jsx";
 import { RemoveJobsSheet } from "./remove.jsx";
 
@@ -315,10 +315,63 @@ function Photos({ job, photos, reload }) {
   );
 }
 
+// ---------------- Email correspondence for review ----------------
+
+const KIND_LABEL = {
+  visit_confirmation: "Visit booked", visit_reminder: "Visit reminder", job_confirmation: "Job booked",
+  job_reminder: "Job reminder", quote: "Quote", invoice: "Invoice",
+};
+const STATUS_CHIP = { sent: ["Sent", "green"], received: ["Received", "blue"], scheduled: ["Scheduled", "amber"], draft: ["Draft, not sent", ""], failed: ["Failed to send", "red"] };
+
+export function EmailsSheet({ messages, customer, onClose }) {
+  const [order, setOrder] = useState("new");
+  const emails = messages
+    .filter((m) => m.channel === "email")
+    .map((m) => ({ ...m, when: m.received_at || m.sent_at || m.send_at || m.created_at }))
+    .sort((a, b) => (order === "new" ? b.when.localeCompare(a.when) : a.when.localeCompare(b.when)));
+  const others = messages.filter((m) => m.channel !== "email").length;
+  return (
+    <Sheet title={`Emails · ${emails.length}`} onClose={onClose}>
+      <div className="row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <span className="small muted">With {customer.name || customer.email || "the customer"}</span>
+        <select className="input" style={{ width: "auto" }} value={order} onChange={(e) => setOrder(e.target.value)} aria-label="Order">
+          <option value="new">Newest first</option>
+          <option value="old">Oldest first</option>
+        </select>
+      </div>
+      {emails.length === 0 && <span className="muted">No emails with this customer yet.</span>}
+      {emails.map((m) => {
+        const [label, tone] = STATUS_CHIP[m.status] ?? [m.status, ""];
+        return (
+          <div key={m.id} className="card" style={{ gap: 6 }}>
+            <div className="chips">
+              <span className={`chip ${tone}`}>{label}</span>
+              {KIND_LABEL[m.kind] && <span className="chip">{KIND_LABEL[m.kind]}</span>}
+              {m.calendar && <span className="chip green">Calendar invite attached</span>}
+            </div>
+            <strong>{m.subject || "(no subject)"}</strong>
+            <span className="small muted">
+              {m.direction === "in" ? `From ${m.from_addr || "customer"}` : `To ${m.to_addr || customer.email || "—"}`}
+              {" · "}{m.status === "scheduled" ? `goes ${fmtDateTime(m.send_at)}` : fmtDateTime(m.when)}
+            </span>
+            <div style={{ whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.45 }}>{m.body}</div>
+            {m.thread_id && (
+              <a className="btn small" style={{ alignSelf: "flex-start" }} href={`https://mail.google.com/mail/#all/${m.thread_id}`} target="_blank" rel="noreferrer">Open in Gmail</a>
+            )}
+          </div>
+        );
+      })}
+      {others > 0 && <span className="small muted">{others} WhatsApp or text message{others === 1 ? " is" : "s are"} on the Enquiry tab.</span>}
+    </Sheet>
+  );
+}
+
 function VisitPanel({ d, reload, job, customer, openTab }) {
   const { saveJob } = useSavers(job, customer, reload);
   const [busy, run] = useBusy();
   const [rescheduling, setRescheduling] = useState(false);
+  const [showEmails, setShowEmails] = useState(false);
+  const emailCount = d.messages.filter((m) => m.channel === "email").length;
   const visit = d.visits.find((v) => v.status !== "cancelled");
   const reminder = d.messages.find((m) => m.kind === "visit_reminder" && m.status !== "draft");
   const address = [job.site_address, job.postcode].filter(Boolean).join(", ");
@@ -336,6 +389,9 @@ function VisitPanel({ d, reload, job, customer, openTab }) {
 
   return (
     <>
+      <button className="btn block" onClick={() => setShowEmails(true)}>Show all emails ({emailCount})</button>
+      {showEmails && <EmailsSheet messages={d.messages} customer={customer} onClose={() => setShowEmails(false)} />}
+
       {visit && !rescheduling ? (
         <div className="card accent">
           <span className="small" style={{ color: "var(--green)", fontWeight: 600 }}>{visit.calendar_event_id ? "In Google Calendar" : "Not in Google Calendar (connect Google)"}</span>
