@@ -145,6 +145,31 @@ function Catalogue() {
   );
 }
 
+function PasswordForm({ email }) {
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [busy, run] = useBusy();
+  const toast = useToast();
+  const submit = (e) => {
+    e.preventDefault();
+    if (pw.length < 8) { toast("Use at least 8 characters", "error"); return; }
+    if (pw !== pw2) { toast("The two passwords don't match", "error"); return; }
+    run("pw", async () => { await sb.setPassword(pw); setPw(""); setPw2(""); }, "Password saved. Use it to sign in from now on");
+  };
+  return (
+    <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <input type="email" name="email" autoComplete="username" value={email || ""} readOnly hidden />
+      <label className="field">Set or change your password
+        <input type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} />
+      </label>
+      <label className="field">Type it again
+        <input type="password" autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)} />
+      </label>
+      <button className="btn primary" disabled={!pw || busy === "pw"}>{busy === "pw" ? <Spinner /> : "Save password"}</button>
+    </form>
+  );
+}
+
 export function SettingsPage({ query }) {
   const [s, setS] = useState(null);
   const [me, setMe] = useState(null);
@@ -196,6 +221,7 @@ export function SettingsPage({ query }) {
         <div className="card">
           <h2>Signed in</h2>
           <span>{me?.email ?? "…"}</span>
+          <PasswordForm email={me?.email} />
           <button className="btn" onClick={sb.signOut}>Sign out</button>
         </div>
       </div>

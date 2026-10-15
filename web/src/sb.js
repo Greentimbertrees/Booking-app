@@ -28,15 +28,24 @@ export function currentSession() {
   return session;
 }
 
-async function authFetch(path, body) {
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/${path}`, {
-    method: "POST",
-    headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+async function authFetch(path, body, method = "POST", bearer) {
+  const headers = { apikey: SUPABASE_KEY, "Content-Type": "application/json" };
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/${path}`, { method, headers, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.msg || data.error_description || data.message || `Sign-in error ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(friendlyAuthError(data.msg || data.error_description || data.message || `Sign-in error ${res.status}`));
+    err.status = res.status;
+    throw err;
+  }
   return data;
+}
+
+function friendlyAuthError(m) {
+  if (/invalid login credentials/i.test(m)) return "Wrong email or password";
+  if (/rate limit|too many/i.test(m)) return "Too many attempts. Wait a few minutes and try again";
+  if (/expired|invalid.*(otp|token)/i.test(m)) return "That code has expired or was already used. Send a new one";
+  return m;
 }
 
 function fromTokenResponse(d) {
@@ -52,6 +61,17 @@ function fromTokenResponse(d) {
 export async function sendSignInEmail(email) {
   const redirect = window.location.origin + window.location.pathname;
   await authFetch(`otp?redirect_to=${encodeURIComponent(redirect)}`, { email, create_user: true });
+}
+
+/** Sign in with email and password (set one in Settings first). */
+export async function signInWithPassword(email, password) {
+  const d = await authFetch("token?grant_type=password", { email, password });
+  saveSession(fromTokenResponse(d));
+}
+
+/** Set or change the password for the signed-in user. */
+export async function setPassword(password) {
+  await authFetch("user", { password }, "PUT", await token());
 }
 
 export async function verifyCode(email, token) {
@@ -75,19 +95,61 @@ export function handleSignInRedirect() {
   return null;
 }
 
+// Keep the user signed in. The refresh token in localStorage lasts until they sign out,
+// so only a definite "this refresh token is no longer valid" reply from Supabase signs
+// them out. Network failures (phone asleep, no signal) keep the session and retry later.
 let refreshing = null;
+
+// Another tab or the home-screen app may have refreshed the session already.
+window.addEventListener("storage", (e) => {
+  if (e.key !== SESSION_KEY) return;
+  try { session = JSON.parse(e.newValue || "null"); } catch { session = null; }
+  listeners.forEach((fn) => fn(session));
+});
+
+function latestStored() {
+  try { return JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch { return null; }
+}
+
+async function doRefresh() {
+  const stored = latestStored();
+  if (stored && stored.refresh_token !== session.refresh_token && stored.expires_at - 60 > Date.now() / 1000) {
+    session = stored; // another tab already refreshed
+    return;
+  }
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const d = await authFetch("token?grant_type=refresh_token", { refresh_token: session.refresh_token });
+      saveSession({ ...fromTokenResponse(d), user: d.user || session.user });
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (e.status >= 400 && e.status < 500) {
+        // Refresh token rejected. Check once more in case another tab rotated it just now.
+        const again = latestStored();
+        if (again && again.refresh_token !== session.refresh_token) { session = again; return; }
+        saveSession(null);
+        throw new Error("Please sign in again");
+      }
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    }
+  }
+  throw new Error("No connection. Check your signal and try again"); // stay signed in
+}
+
 async function token() {
   if (!session) throw new Error("Not signed in");
   if (session.expires_at - 60 > Date.now() / 1000) return session.access_token;
-  if (!refreshing) {
-    refreshing = authFetch("token?grant_type=refresh_token", { refresh_token: session.refresh_token })
-      .then((d) => saveSession(fromTokenResponse(d)))
-      .catch((e) => { saveSession(null); throw e; })
-      .finally(() => { refreshing = null; });
-  }
+  if (!refreshing) refreshing = doRefresh().finally(() => { refreshing = null; });
   await refreshing;
   return session.access_token;
 }
+
+// Refresh quietly when the app comes back to the foreground, so it's ready to use.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && session) token().catch(() => {});
+});
 
 export async function getUser() {
   const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
@@ -103,7 +165,7 @@ export function signOut() {
 
 // ---------------- Database (PostgREST) ----------------
 
-async function rest(method, path, { body, prefer } = {}) {
+async function rest(method, path, { body, prefer } = {}, retried = false) {
   const headers = {
     apikey: SUPABASE_KEY,
     Authorization: `Bearer ${await token()}`,
@@ -113,7 +175,14 @@ async function rest(method, path, { body, prefer } = {}) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     method, headers, body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (res.status === 401) { saveSession(null); throw new Error("Please sign in again"); }
+  if (res.status === 401) {
+    if (!retried && session) {
+      session = { ...session, expires_at: 0 }; // force a refresh, then try once more
+      return rest(method, path, { body, prefer }, true);
+    }
+    saveSession(null);
+    throw new Error("Please sign in again");
+  }
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) throw new Error(data?.message || `Database error ${res.status}`);

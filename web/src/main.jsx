@@ -14,43 +14,68 @@ import "./app.css";
 
 function Login({ linkError }) {
   const [email, setEmail] = useState(() => localStorage.getItem("gt.email") || "");
-  const [sent, setSent] = useState(false);
+  const [password, setPassword] = useState("");
+  const [mode, setMode] = useState("password"); // password | email | code
   const [code, setCode] = useState("");
   const [busy, run] = useBusy();
+  const remember = () => { try { localStorage.setItem("gt.email", email.trim()); } catch { /* ignore */ } };
 
+  const signIn = (e) => {
+    e.preventDefault();
+    remember();
+    run("pw", () => sb.signInWithPassword(email.trim(), password));
+  };
   const send = (e) => {
     e.preventDefault();
+    remember();
     run("send", async () => {
-      localStorage.setItem("gt.email", email.trim());
       await sb.sendSignInEmail(email.trim());
-      setSent(true);
+      setMode("code");
     });
   };
   const verify = (e) => {
     e.preventDefault();
-    run("verify", () => sb.verifyCode(email.trim(), code.trim()));
+    run("verify", () => sb.verifyCode(email.trim(), code.replace(/\s/g, "")));
   };
+
+  const emailField = (
+    <label className="field">Your email
+      <input type="email" name="email" required autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} />
+    </label>
+  );
 
   return (
     <div className="login">
       <span className="muted">Green Timber Trees</span>
       <h1>Jobs</h1>
-      {linkError && <div className="banner amber">That sign-in link didn't work: {linkError}. Send a new one below.</div>}
-      {!sent ? (
-        <form onSubmit={send} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <label className="field">Your email
-            <input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+      {linkError && <div className="banner amber">That sign-in link didn't work: {linkError}. Try again below.</div>}
+      {mode === "password" && (
+        <form onSubmit={signIn} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {emailField}
+          <label className="field">Password
+            <input type="password" name="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
           </label>
-          <button className="btn primary block" disabled={busy === "send"}>{busy === "send" ? <Spinner /> : "Email me a sign-in link"}</button>
+          <button className="btn primary block" disabled={busy === "pw"}>{busy === "pw" ? <Spinner /> : "Sign in"}</button>
+          <span className="small muted">You'll stay signed in on this device until you sign out.</span>
+          <button type="button" className="btn small" onClick={() => setMode("email")}>No password yet? Email me a code</button>
         </form>
-      ) : (
+      )}
+      {mode === "email" && (
+        <form onSubmit={send} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {emailField}
+          <button className="btn primary block" disabled={busy === "send"}>{busy === "send" ? <Spinner /> : "Email me a sign-in code"}</button>
+          <button type="button" className="btn small" onClick={() => setMode("password")}>Sign in with password instead</button>
+        </form>
+      )}
+      {mode === "code" && (
         <form onSubmit={verify} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div className="banner green">Check {email} and tap the sign-in link. Open it on this phone so you stay signed in here.</div>
-          <label className="field">Or type the code from the email
+          <div className="banner green">We've emailed {email}. Type the code from the email here (check Promotions/Updates if it's not in your inbox). Once you're in, set a password in Settings so you don't need codes again.</div>
+          <label className="field">Code from the email
             <input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} />
           </label>
-          <button className="btn block" disabled={!code || busy === "verify"}>{busy === "verify" ? <Spinner /> : "Sign in with code"}</button>
-          <button type="button" className="btn small" onClick={() => setSent(false)}>Use a different email</button>
+          <button className="btn primary block" disabled={!code || busy === "verify"}>{busy === "verify" ? <Spinner /> : "Sign in with code"}</button>
+          <button type="button" className="btn small" onClick={() => setMode("email")}>Send a new code</button>
+          <button type="button" className="btn small" onClick={() => setMode("password")}>Sign in with password instead</button>
         </form>
       )}
     </div>
