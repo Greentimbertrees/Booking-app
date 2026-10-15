@@ -62,3 +62,8 @@ export function timeString(t: string): string {
   // Postgres time "09:00:00" -> "09:00"
   return t.slice(0, 5);
 }
+
+/** "09:00" in London time. */
+export function formatTime(d: Date): string {
+  return new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(d);
+}

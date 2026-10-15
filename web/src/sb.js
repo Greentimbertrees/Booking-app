@@ -234,6 +234,22 @@ export async function uploadPhoto(jobId, file, source) {
   return insertOne("photos", { job_id: jobId, storage_path: path, source });
 }
 
+/** Upload the email logo to the public branding bucket and return its web address. */
+export async function uploadLogo(file) {
+  const ext = (file.name?.split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "") || "png";
+  const path = `logo-${Date.now().toString(36)}.${ext}`;
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/branding/${path}`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${await token()}`, "Content-Type": file.type || "image/png" },
+    body: file,
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.message || `Logo upload failed (${res.status})`);
+  }
+  return `${SUPABASE_URL}/storage/v1/object/public/branding/${path}`;
+}
+
 export async function photoUrls(paths) {
   if (!paths.length) return {};
   const res = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/${BUCKET}`, {

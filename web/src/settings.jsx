@@ -145,6 +145,28 @@ function Catalogue() {
   );
 }
 
+function LogoField({ url, onSave }) {
+  const [busy, run] = useBusy();
+  const pick = (e) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    if (f.size > 1_000_000) { alert("Please use an image under 1 MB"); return; }
+    run("logo", async () => onSave(await sb.uploadLogo(f)), "Logo saved");
+  };
+  return (
+    <div className="field" style={{ gap: 8 }}>
+      <span>Logo under the signature</span>
+      {url ? <img src={url} alt="Email logo" style={{ maxWidth: 200, height: "auto", background: "#fff", borderRadius: 6 }} />
+        : <span className="small muted">No logo yet</span>}
+      <label className="btn small" style={{ alignSelf: "flex-start" }}>
+        {busy === "logo" ? <Spinner /> : url ? "Change logo" : "Upload logo"}
+        <input type="file" accept="image/png,image/jpeg,image/gif" hidden onChange={pick} />
+      </label>
+    </div>
+  );
+}
+
 function PasswordForm({ email }) {
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
@@ -209,6 +231,9 @@ export function SettingsPage({ query }) {
               <h2>Quotes, invoices and emails</h2>
               <SaveField label="Business name" value={s.business_name} onSave={(v) => save({ business_name: v || "Green Timber Trees" })} />
               <SaveField label="Sign-off on emails" value={s.signature} onSave={(v) => save({ signature: v || "Green Timber Trees" })} />
+              <SaveField label="Mobile under the signature" type="tel" value={s.mobile} onSave={(v) => save({ mobile: v || null })} />
+              <LogoField url={s.logo_url} onSave={(v) => save({ logo_url: v })} />
+              <span className="small muted">Visit and job booking emails include an "Add to calendar" link for Google Calendar and an invite.ics file for Apple Calendar and Outlook.</span>
               <div className="grid2">
                 <SaveField label="VAT %" type="number" value={s.vat_rate} onSave={num("vat_rate")} />
                 <SaveField label="Quote valid (days)" type="number" value={s.quote_valid_days} onSave={num("quote_valid_days")} />

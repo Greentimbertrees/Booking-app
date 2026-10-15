@@ -2,7 +2,8 @@
 import { admin, getSettings, HttpError } from "./supa.ts";
 import * as g from "./google.ts";
 import { analyseConversation, Slot } from "./ai.ts";
-import { addDays, formatLongDate, formatSlot, londonDate, londonToUtc, londonWeekday, timeString } from "./time.ts";
+import { addDays, formatLongDate, formatSlot, formatTime, londonDate, londonToUtc, londonWeekday, timeString } from "./time.ts";
+import { buildIcs, CalendarInvite, htmlBody, plainBody } from "./invite.ts";
 
 const money = (n: number) => `£${n.toFixed(2)}`;
 const firstName = (name?: string | null) => (name ?? "").trim().split(/\s+/)[0] || "there";
@@ -137,10 +138,12 @@ export async function analyseJob(jobId: string, opts: { allowAutoSend?: boolean 
   }
 
   let booked = false;
+  let invite: CalendarInvite | null = null;
   if (analysis.accepted_slot_id) {
     const slot = slots.find((s) => s.id === analysis.accepted_slot_id);
     if (slot) {
-      await bookVisit(jobId, slot.start);
+      const visit = await bookVisit(jobId, slot.start);
+      invite = visit?.invite ?? null;
       booked = true;
     }
   }
@@ -164,6 +167,7 @@ export async function analyseJob(jobId: string, opts: { allowAutoSend?: boolean 
       subject: lastIn?.subject ? (lastIn.subject.startsWith("Re:") ? lastIn.subject : `Re: ${lastIn.subject}`) : `Your enquiry – ${settings.business_name}`,
       body: analysis.reply,
       thread_id: lastIn?.thread_id ?? null,
+      calendar: ch === "email" ? invite : null,
     }).select("id").single();
     draftId = draft?.id ?? null;
 
@@ -202,8 +206,15 @@ export async function sendMessage(messageId: string, bodyOverride?: string) {
     const { data: lastIn } = await admin.from("messages").select("rfc_message_id, thread_id")
       .eq("job_id", m.job_id).eq("direction", "in").eq("channel", "email")
       .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    const settings = await getSettings();
+    const brand = { mobile: settings.mobile, logoUrl: settings.logo_url, businessName: settings.business_name };
+    const invite = (m.calendar ?? null) as CalendarInvite | null;
+    const conn = await g.getConnection();
     const sent = await g.sendEmail({
-      to, subject: m.subject ?? "Green Timber Trees", body,
+      to, subject: m.subject ?? "Green Timber Trees",
+      body: plainBody(body, brand, invite),
+      html: htmlBody(body, brand, invite),
+      ics: invite ? buildIcs(invite, { name: settings.business_name, email: conn?.google_email }) : null,
       threadId: m.thread_id ?? lastIn?.thread_id, inReplyTo: lastIn?.rfc_message_id,
     });
     await admin.from("messages").update({
@@ -223,6 +234,37 @@ export async function sendMessage(messageId: string, bodyOverride?: string) {
   return { sent: false, openLink: link };
 }
 
+// ---------------- Calendar invites for customers ----------------
+
+const siteAddress = (job: any) => [job.site_address, job.postcode].filter(Boolean).join(", ");
+
+function visitInvite(job: any, settings: any, start: Date, end: Date): CalendarInvite {
+  return {
+    uid: `visit-${job.id}@greentimbertrees.co.uk`,
+    sequence: Math.floor(Date.now() / 1000),
+    title: `${settings.business_name} – free site visit`,
+    location: siteAddress(job) || undefined,
+    description: `Free site visit from ${settings.business_name} to look at the trees and talk through what you'd like done.` +
+      (settings.mobile ? `\nIf you need to rearrange, reply to our email or call ${settings.mobile}.` : `\nIf you need to rearrange, just reply to our email.`),
+    start: start.toISOString(),
+    end: end.toISOString(),
+  };
+}
+
+function jobInvite(job: any, settings: any, startDate: string, endDate: string): CalendarInvite {
+  return {
+    uid: `job-${job.id}@greentimbertrees.co.uk`,
+    sequence: Math.floor(Date.now() / 1000),
+    title: `${settings.business_name} – ${job.title ?? "tree work"}`,
+    location: siteAddress(job) || undefined,
+    description: `${settings.business_name} arriving around 8am. Please make sure we can get to the work area.` +
+      (settings.mobile ? `\nQuestions: reply to our email or call ${settings.mobile}.` : ""),
+    start: startDate,
+    end: addDays(endDate, 1),
+    allDay: true,
+  };
+}
+
 // ---------------- Site visits ----------------
 
 export async function cancelVisit(visitId: string) {
@@ -234,13 +276,14 @@ export async function cancelVisit(visitId: string) {
   await admin.from("site_visits").update({ status: "cancelled" }).eq("id", visitId);
 }
 
-export async function bookVisit(jobId: string, startIso: string) {
+export async function bookVisit(jobId: string, startIso: string, opts: { notify?: boolean } = {}) {
   const settings = await getSettings();
   const job = await loadJob(jobId);
   const c = job.customers ?? {};
   const start = new Date(startIso);
   const end = new Date(start.getTime() + settings.visit_minutes * 60000);
   const name = c.name ?? "Customer";
+  const invite = visitInvite(job, settings, start, end);
 
   const { data: existing } = await admin.from("site_visits").select("id").eq("job_id", jobId).neq("status", "cancelled");
   for (const v of existing ?? []) await cancelVisit(v.id);
@@ -287,8 +330,9 @@ export async function bookVisit(jobId: string, startIso: string) {
     await admin.from("messages").insert({
       job_id: jobId, channel: "email", direction: "out", status: "scheduled", kind: "visit_reminder",
       subject: `Reminder: site visit ${formatSlot(start)}`,
-      body: `Hi ${firstName(c.name)},\n\nJust a reminder that we'll be visiting ${[job.site_address, job.postcode].filter(Boolean).join(", ") || "you"} on ${formatLongDate(start)} at ${formatSlot(start).split(", ")[1]} to look at the trees and talk through what you'd like done.\n\nIf the time no longer suits, just reply to this email and we'll rearrange.\n\n${settings.signature}`,
+      body: `Hi ${firstName(c.name)},\n\nJust a reminder that we'll be visiting ${[job.site_address, job.postcode].filter(Boolean).join(", ") || "you"} on ${formatLongDate(start)} at ${formatTime(start)} to look at the trees and talk through what you'd like done.\n\nIf the time no longer suits, just reply to this email and we'll rearrange.\n\n${settings.signature}`,
       send_at: remindAt.toISOString(),
+      calendar: invite,
     });
   }
 
@@ -298,7 +342,14 @@ export async function bookVisit(jobId: string, startIso: string) {
     call_reminder_at: callAt.toISOString(), customer_reminder_at: remindAt.getTime() > 0 ? remindAt.toISOString() : null,
   }).select("*").single();
   await admin.from("jobs").update({ step: Math.max(job.step, 2), offered_slots: [] }).eq("id", jobId);
-  return visit;
+
+  // Booked in the app (e.g. agreed by phone): confirm by email with the calendar invite.
+  if (opts.notify) {
+    await emailCustomer(jobId, "visit_confirmation", `Site visit booked: ${formatLongDate(start)} at ${formatTime(start)}`,
+      `Hi ${firstName(c.name)},\n\nThank you for your enquiry. We've booked a free site visit at ${siteAddress(job) || "your property"} on ${formatLongDate(start)} at ${formatTime(start)} to look at the trees and talk through what you'd like done.\n\nYou can add it to your calendar using the links below. If the time no longer suits, just reply to this email and we'll rearrange.\n\n${settings.signature}`,
+      invite);
+  }
+  return { ...visit, invite };
 }
 
 // ---------------- Quotes, jobs and invoices ----------------
@@ -328,11 +379,11 @@ function itemLines(items: any[]): string {
   return out.join("\n");
 }
 
-async function emailCustomer(jobId: string, kind: string, subject: string, body: string) {
+async function emailCustomer(jobId: string, kind: string, subject: string, body: string, calendar: CalendarInvite | null = null) {
   const job = await loadJob(jobId);
   const to = job.customers?.email;
   const { data: msg } = await admin.from("messages").insert({
-    job_id: jobId, channel: "email", direction: "out", status: "draft", kind, to_addr: to, subject, body,
+    job_id: jobId, channel: "email", direction: "out", status: "draft", kind, to_addr: to, subject, body, calendar,
   }).select("id").single();
   if (to && (await g.isConnected())) {
     await sendMessage(msg!.id);
@@ -388,10 +439,11 @@ export async function bookJob(jobId: string, startDate: string, endDate: string)
     eventId = ev.id;
   }
 
+  const invite = jobInvite(job, settings, startDate, endDate);
   const startD = new Date(startDate + "T12:00:00Z");
   const dates = startDate === endDate ? formatLongDate(startD) : `${formatLongDate(startD)} to ${formatLongDate(new Date(endDate + "T12:00:00Z"))}`;
   await emailCustomer(jobId, "job_confirmation", `Booked: tree work on ${formatLongDate(startD)}`,
-    `Hi ${firstName(c.name)},\n\nThank you for accepting our quote. We've booked your work for ${dates}. We'll arrive at around 8am.\n\nPlease make sure we can get to the work area (${job.access_notes ?? "as discussed"}). If anything changes, just reply to this email.\n\n${settings.signature}`);
+    `Hi ${firstName(c.name)},\n\nThank you for accepting our quote. We've booked your work for ${dates}. We'll arrive at around 8am.\n\nPlease make sure we can get to the work area (${job.access_notes ?? "as discussed"}). You can add the dates to your calendar using the links below. If anything changes, just reply to this email.\n\n${settings.signature}`, invite);
 
   const remindAt = londonToUtc(addDays(startDate, -2), "18:00");
   if (remindAt.getTime() > Date.now()) {
@@ -400,6 +452,7 @@ export async function bookJob(jobId: string, startDate: string, endDate: string)
       subject: `Reminder: tree work on ${formatLongDate(startD)}`,
       body: `Hi ${firstName(c.name)},\n\nJust a reminder that we'll be with you on ${dates}, arriving around 8am. Please make sure we can get to the work area, and move any cars that might be in the way.\n\n${settings.signature}`,
       send_at: remindAt.toISOString(),
+      calendar: invite,
     });
   }
   await admin.from("jobs").update({

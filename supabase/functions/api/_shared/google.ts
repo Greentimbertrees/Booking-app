@@ -229,23 +229,44 @@ function encodeHeader(s: string): string {
   return `=?UTF-8?B?${toB64(new TextEncoder().encode(s))}?=`;
 }
 
+const b64Lines = (s: string) => toB64(new TextEncoder().encode(s)).replace(/(.{76})/g, "$1\r\n");
+
 export async function sendEmail(opts: {
-  to: string; subject: string; body: string;
+  to: string; subject: string; body: string; html?: string | null;
+  ics?: string | null;
   threadId?: string | null; inReplyTo?: string | null; references?: string | null;
 }): Promise<{ id: string; threadId: string }> {
-  const bodyB64 = toB64(new TextEncoder().encode(opts.body)).replace(/(.{76})/g, "$1\r\n");
-  const lines = [
+  const headers = [
     `To: ${opts.to}`,
     `Subject: ${encodeHeader(opts.subject)}`,
     "MIME-Version: 1.0",
-    "Content-Type: text/plain; charset=UTF-8",
-    "Content-Transfer-Encoding: base64",
   ];
   if (opts.inReplyTo) {
-    lines.push(`In-Reply-To: ${opts.inReplyTo}`);
-    lines.push(`References: ${[opts.references, opts.inReplyTo].filter(Boolean).join(" ")}`);
+    headers.push(`In-Reply-To: ${opts.inReplyTo}`);
+    headers.push(`References: ${[opts.references, opts.inReplyTo].filter(Boolean).join(" ")}`);
   }
-  const raw = lines.join("\r\n") + "\r\n\r\n" + bodyB64;
+  const part = (type: string, content: string, extra: string[] = []) =>
+    [`Content-Type: ${type}`, "Content-Transfer-Encoding: base64", ...extra].join("\r\n") + "\r\n\r\n" + b64Lines(content);
+
+  let mime: string;
+  if (!opts.html && !opts.ics) {
+    mime = part("text/plain; charset=UTF-8", opts.body);
+  } else {
+    const alt = `alt_${crypto.randomUUID().replace(/-/g, "")}`;
+    const altParts = [part("text/plain; charset=UTF-8", opts.body)];
+    if (opts.html) altParts.push(part("text/html; charset=UTF-8", opts.html));
+    const altBody = `Content-Type: multipart/alternative; boundary="${alt}"\r\n\r\n` +
+      altParts.map((p) => `--${alt}\r\n${p}`).join("\r\n") + `\r\n--${alt}--`;
+    if (opts.ics) {
+      const mix = `mix_${crypto.randomUUID().replace(/-/g, "")}`;
+      const icsPart = part('text/calendar; charset=UTF-8; method=PUBLISH; name="invite.ics"', opts.ics,
+        ['Content-Disposition: attachment; filename="invite.ics"']);
+      mime = `Content-Type: multipart/mixed; boundary="${mix}"\r\n\r\n--${mix}\r\n${altBody}\r\n--${mix}\r\n${icsPart}\r\n--${mix}--`;
+    } else {
+      mime = altBody;
+    }
+  }
+  const raw = headers.join("\r\n") + "\r\n" + mime;
   const payload: Record<string, string> = { raw: b64urlEncode(new TextEncoder().encode(raw)) };
   if (opts.threadId) payload.threadId = opts.threadId;
   return await gfetch(`${GMAIL}/messages/send`, { method: "POST", body: JSON.stringify(payload) });

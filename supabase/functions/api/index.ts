@@ -121,7 +121,7 @@ Deno.serve(async (req) => {
         return json({ slots: await wf.findSlots(b.postcode ?? null, b.count ?? 3) });
 
       case "book-visit":
-        return json({ visit: await wf.bookVisit(need("jobId"), need("startsAt")) });
+        return json({ visit: await wf.bookVisit(need("jobId"), need("startsAt"), { notify: b.notify !== false }) });
 
       case "cancel-visit":
         await wf.cancelVisit(need("visitId"));
